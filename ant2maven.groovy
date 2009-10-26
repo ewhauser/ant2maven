@@ -129,6 +129,12 @@ options.addOption(OptionBuilder.withArgName("o")
   .hasArgs(1)
   .isRequired(false)
   .create("o"))
+options.addOption(OptionBuilder.withArgName("u")
+  .withLongOpt("nexusurl")
+  .withDescription("Base URL for Nexus repository to search against")
+  .hasArgs(1)
+  .isRequired(false)
+  .create("u"))
 options.addOption(OptionBuilder.withArgName("?")
   .withLongOpt("help")
   .withDescription("Prints help")
@@ -173,7 +179,10 @@ def hash = { file ->
   hash.toString()
 }
 
-def repoXml = "http://repository.sonatype.org/service/local/repositories".toURL().text
+def baseNexusUrl = cmd.getOptionValue("u", "http://repository.sonatype.org").replaceAll("(?<!:)/(//*)", "/")
+if (!baseNexusUrl.endsWith('/')) baseNexusUrl = baseNexusUrl + "/"
+
+def repoXml = "${baseNexusUrl}service/local/repositories".toURL().text
 def rootElement= new XmlParser().parseText(repoXml)
 def repos = []
 rootElement.data.'repositories-item'.each {
@@ -187,13 +196,14 @@ def paths = []
 cmd.getOptionValues("p").each { ((Path)project.getReference(it)).list().each { paths << buildPaths(it, "compile") }}
 cmd.getOptionValues("t").each { ((Path)project.getReference(it)).list().each { paths << buildPaths(it, "test") }}
 
+
 def leftovers = []
 def artifacts = []
 new TreeSet(paths).each { p ->
   def hashValue = hash(p.file)
 
   print "Searching for artifact for ${p.file.name}..."
-  def xml = "http://repository.sonatype.org/service/local/data_index?sha1=${hashValue}".toURL().text
+  def xml = "${baseNexusUrl}service/local/data_index?sha1=${hashValue}".toURL().text
 
   def root = new XmlParser().parseText(xml)
   if (!root.data.artifact) {
