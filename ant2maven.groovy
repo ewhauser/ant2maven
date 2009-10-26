@@ -172,7 +172,7 @@ def hash = { file ->
   def data = FileUtils.readFileToByteArray(file)
   md.update(data)
 
-    def digest = md.digest()
+  def digest = md.digest()
   def hash = new StringBuilder()
   for (int i = 0; i < digest.length; i++) {
     def hex = Integer.toHexString(digest[i]);
@@ -219,22 +219,32 @@ new TreeSet(paths).each { p ->
     return
   }
   root.data.artifact.each {
+    //Try to find a pom if no pom link is supplied
+    def pomLink
+    if (it.pomLink?.text()) {
+      pomLink = it.pomLink.text()
+    } else {
+      def resourceUri = it.resourceURI.text()
+      pomLink = resourceUri.substring(0, resourceUri.lastIndexOf('.')) + ".pom"
+    }
+
     def ai = new ArtifactInfo(groupId: it.groupId.text(), artifactId: it.artifactId.text(), version: it.version.text(),
-            repoId: it.repoId.text(), pomLink: it.pomLink.text(), scope: p.scope)
+			repoId: it.repoId.text(), pomLink: pomLink, scope: p.scope)
     artifacts << ai
     println "Found $ai.groupId $ai.artifactId $ai.version"
   }
 }
 
 //Attempt to find the transitive dependencies for each JAR.  This uses the Apache Ivy APIs so that we parse any placeholders in the pom
-def deps = [:]
+def deps = []
 artifacts.each { a ->
   try {
+    println "artifact -> $a"
     def pom = PomModuleDescriptorParser.getInstance().parseDescriptor(new IvySettings(), a.pomLink.toURL(), false)
     pom.dependencies.each {
       def rev = it.dependencyRevisionId
       if (it.transitive && !Arrays.asList(it.moduleConfigurations).contains("test")) {
-        deps.put(a, new ArtifactInfo(artifactId: rev.name, groupId: rev.organisation, version: rev.revision))
+        deps << new ArtifactInfo(artifactId: rev.name, groupId: rev.organisation, version: rev.revision)
       }
     }
   } catch (Exception e) { println "Could not retrieve POM for $a ... Skipping because: ${e.message}" }
@@ -242,6 +252,16 @@ artifacts.each { a ->
 
 def currentDir = System.getProperty("user.dir")
 def defaultName = currentDir.substring(currentDir.lastIndexOf(System.getProperty("file.separator")))
+
+//Try to give the user an indicator that their leftover is probably a transitive dependency
+def cleaner = { it.replaceAll(/^(.*)(\d+\.\d+.*)$/, "") }
+def transitiveLeftovers = []
+leftovers.each { l ->
+  def cl = l.replaceAll(/(\w|-)((\d+\.\d+)+).*$/, "\$1").replaceAll('-', '')
+  if (cl.endsWith('.jar')) cl = cl.substring(0, cl.size() - 4)
+  println "$l -> $cl"
+  if (deps.find { cl.equals(it.artifactId.replaceAll('-', '')) }) transitiveLeftovers << l
+}
 
 //Render the pom.xml
 def binding = [
@@ -252,6 +272,7 @@ def binding = [
         groovy: Boolean.valueOf(cmd.getOptionValue("g", "false")),
         repositories: repos,
         leftovers: leftovers.sort(),
+        transitiveLeftovers: transitiveLeftovers,
         dependencies: artifacts - deps] //Don't include transitive dependencies
 def pomTemplate = """
 <?xml version="1.0" encoding="UTF-8"?>
@@ -292,6 +313,7 @@ def pomTemplate = """
         <% } %>
         <% leftovers.each { l -> %>
         <!--
+        <% if (transitiveLeftovers.contains(l)) { out << "This JAR is likely a transitive dependency." } %>
         <dependency>
             <groupId><% out << l %></groupId>
             <artifactId><% out << l %></artifactId>
