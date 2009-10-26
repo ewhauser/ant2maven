@@ -11,6 +11,7 @@ import org.apache.tools.ant.ProjectHelper
 import org.apache.tools.ant.types.Path
 import org.apache.commons.cli.HelpFormatter
 
+//First grab the grapes we need for the script and create a few beans to hold some values
 @Grab(group = 'org.apache.ant', module = 'ant', version = '1.7.1')
 @Grab(group = 'commons-io', module = 'commons-io', version = '1.4')
 @Grab(group = 'commons-cli', module = 'commons-cli', version = '1.2')
@@ -76,6 +77,7 @@ class PathInfo implements Comparable {
   }
 }
 
+//Define the command line options
 def options = new Options()
 options.addOption(OptionBuilder.withArgName("a")
   .withLongOpt("antfile")
@@ -141,6 +143,7 @@ options.addOption(OptionBuilder.withArgName("?")
   .isRequired(false)
   .create("?"))
 
+//create the help format
 def help = {
   def formatter = new HelpFormatter();
   formatter.printHelp("ant2maven", options);
@@ -155,11 +158,13 @@ try {
 
 if (cmd.getOptionValue("?")) help()
 
+//Load the ant file
 def project = new Project();
 def buildFile = new File(cmd.getOptionValue("a", "build.xml"))
 project.init();
 ProjectHelper.configureProject(project, buildFile);
 
+//Function to hash the dependency
 def hash = { file ->
   def md = MessageDigest.getInstance("SHA1")
   md.reset()
@@ -179,9 +184,11 @@ def hash = { file ->
   hash.toString()
 }
 
+//Get the URL for the nexus repository and clean it up
 def baseNexusUrl = cmd.getOptionValue("u", "http://repository.sonatype.org").replaceAll("(?<!:)/(//*)", "/")
 if (!baseNexusUrl.endsWith('/')) baseNexusUrl = baseNexusUrl + "/"
 
+//Retrieve all the repositories from the Nexus server.  Skip over Maven Central, we don't want to add it to the pom
 def repoXml = "${baseNexusUrl}service/local/repositories".toURL().text
 def rootElement= new XmlParser().parseText(repoXml)
 def repos = []
@@ -190,13 +197,13 @@ rootElement.data.'repositories-item'.each {
   repos << new Repo(name: it.name.text(), uri: it.resourceURI.text(), legacy: "maven1".equals(it.format.text()))  
 }
 
-
+//Load all of the build paths defined in the ant file and indicate their scope
 def buildPaths = { p, scope -> new PathInfo(file: new File(p), scope: scope) }
 def paths = []
 cmd.getOptionValues("p").each { ((Path)project.getReference(it)).list().each { paths << buildPaths(it, "compile") }}
 cmd.getOptionValues("t").each { ((Path)project.getReference(it)).list().each { paths << buildPaths(it, "test") }}
 
-
+//Search the nexus repository for the JAR using the hash of the JAR file
 def leftovers = []
 def artifacts = []
 new TreeSet(paths).each { p ->
@@ -219,6 +226,7 @@ new TreeSet(paths).each { p ->
   }
 }
 
+//Attempt to find the transitive dependencies for each JAR.  This uses the Apache Ivy APIs so that we parse any placeholders in the pom
 def deps = [:]
 artifacts.each { a ->
   try {
@@ -235,6 +243,7 @@ artifacts.each { a ->
 def currentDir = System.getProperty("user.dir")
 def defaultName = currentDir.substring(currentDir.lastIndexOf(System.getProperty("file.separator")))
 
+//Render the pom.xml
 def binding = [
         name: cmd.getOptionValue("n", defaultName),
         artifactId: cmd.getOptionValue("aid", defaultName),
